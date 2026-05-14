@@ -17,6 +17,7 @@ st.set_page_config(page_title="Pharma Targeting AI", page_icon="💊", layout="w
 
 st.title("Pharma Targeting AI")
 st.caption("Interactive decile and composite-score targeting dashboard")
+st.info("Web build marker: 2026-05-14-UI-R3")
 
 
 # ---------- Sidebar inputs ----------
