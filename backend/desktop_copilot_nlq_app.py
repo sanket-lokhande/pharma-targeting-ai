@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from tkinter import BOTH, END, LEFT, RIGHT, TOP, BooleanVar, Button, Canvas, Checkbutton, Entry, Frame, Label, Scrollbar, Spinbox, StringVar, Tk, Toplevel, filedialog, messagebox, ttk
+from tkinter import BOTH, END, LEFT, RIGHT, TOP, Button, Canvas, Entry, Frame, Label, Scrollbar, Spinbox, StringVar, Tk, Toplevel, filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 import numpy as np
@@ -34,9 +34,6 @@ class DesktopCopilotNLQApp:
         self.current_file_entry = self._build_file_selector("Current period file (.xlsx)", required=True)
         self.previous_file_entry = self._build_file_selector("Previous period file (.xlsx, optional)", required=False)
         self.output_file_entry = self._build_output_selector("Output workbook path (.xlsx, optional)")
-        self.disease_market_entry = self._build_text_input("Disease Market (e.g., aGvHD, cGvHD, Hematology)", required=False)
-        self.enable_live_research_var = BooleanVar(value=False)
-        self._build_live_research_toggle()
 
         controls_frame = Frame(self.root)
         controls_frame.pack(fill="x", padx=12, pady=(14, 4))
@@ -115,24 +112,6 @@ class DesktopCopilotNLQApp:
         ).pack(side=RIGHT, padx=(8, 0))
 
         return entry
-
-    def _build_text_input(self, label: str, required: bool = False) -> Entry:
-        Label(self.root, text=label + (" *" if required else "")).pack(anchor="w", padx=12, pady=(8, 4))
-        row = Frame(self.root)
-        row.pack(fill="x", padx=12)
-
-        entry = Entry(row)
-        entry.pack(side=LEFT, fill="x", expand=True)
-        return entry
-
-    def _build_live_research_toggle(self) -> None:
-        row = Frame(self.root)
-        row.pack(fill="x", padx=12, pady=(6, 2))
-        Checkbutton(
-            row,
-            text="Enable live internet research for market insights (requires internet)",
-            variable=self.enable_live_research_var,
-        ).pack(side=LEFT)
 
     def _pick_file(self, entry: Entry) -> None:
         selected = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
@@ -319,8 +298,6 @@ class DesktopCopilotNLQApp:
             messagebox.showerror("Invalid file", f"Could not process current file:\n{exc}")
             return
 
-        disease_market = self.disease_market_entry.get().strip()
-
         algorithm = (self.algorithm_var.get() or "kmeans").strip().lower()
         normalization = (self.normalization_var.get() or "minmax").strip().lower()
         try:
@@ -381,8 +358,6 @@ class DesktopCopilotNLQApp:
                 validation_notes=validation_notes,
                 previous_df=previous_df,
                 previous_id_column=previous_id_column,
-                disease_market=disease_market,
-                enable_live_research=self.enable_live_research_var.get(),
             )
         except Exception as exc:
             messagebox.showerror("Analysis error", str(exc))
@@ -401,7 +376,7 @@ class DesktopCopilotNLQApp:
             compare_previous=previous_df is not None,
         )
         if MATPLOTLIB_AVAILABLE:
-            self._show_visual_dashboard(payload, [item.metric for item in metric_weights], disease_market)
+            self._show_visual_dashboard(payload, [item.metric for item in metric_weights], "")
         else:
             messagebox.showwarning(
                 "Visuals unavailable",
@@ -472,8 +447,8 @@ class DesktopCopilotNLQApp:
         total_prescribers = grouped["prescribers"].sum() or 1
         total_potential = grouped["potential"].sum() or 1
 
-        x = (grouped["cum_potential"] / total_potential) * 100
-        y = (grouped["cum_prescribers"] / total_prescribers) * 100
+        x = (grouped["cum_prescribers"] / total_prescribers) * 100
+        y = (grouped["cum_potential"] / total_potential) * 100
 
         x = pd.concat([pd.Series([0.0]), x], ignore_index=True)
         y = pd.concat([pd.Series([0.0]), y], ignore_index=True)
@@ -484,8 +459,8 @@ class DesktopCopilotNLQApp:
         ax.set_xlim(0, 100)
         ax.set_ylim(0, 100)
         ax.set_title("Lorenz Curve for HCPs", fontsize=12, fontweight="bold", color="#1D3557")
-        ax.set_xlabel("Cumulative % of Potential")
-        ax.set_ylabel("Cumulative % of Prescribers")
+        ax.set_xlabel("Cumulative % of Prescribers")
+        ax.set_ylabel("Cumulative % of Potential")
         ax.grid(alpha=0.3)
         ax.set_facecolor("#FFFFFF")
 
@@ -582,8 +557,6 @@ class DesktopCopilotNLQApp:
             f"Segmentation algorithm: {algorithm}",
             f"Cluster count: {n_clusters}",
             f"Comparison performed: {compare_previous}",
-            f"Disease market: {self.disease_market_entry.get().strip() or 'Not specified'}",
-            f"Live internet research: {'Enabled' if self.enable_live_research_var.get() else 'Disabled'}",
             "",
             "Summary insights:",
         ]

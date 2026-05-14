@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from io import BytesIO
 
-import numpy as np
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
-from matplotlib.figure import Figure
 
 from app.schemas import MetricWeight
 from app.services.analysis_engine import build_analysis_payload
@@ -17,7 +16,7 @@ from app.services.validation import validate_dataframe
 st.set_page_config(page_title="Pharma Targeting AI", page_icon="💊", layout="wide")
 
 st.title("Pharma Targeting AI")
-st.caption("Decile-based HCP segmentation, comparison, and market insights")
+st.caption("Interactive decile and composite-score targeting dashboard")
 
 
 # ---------- Sidebar inputs ----------
@@ -25,8 +24,6 @@ with st.sidebar:
     st.header("Inputs")
     current_file = st.file_uploader("Current period file (.xlsx) *", type=["xlsx"], key="current")
     previous_file = st.file_uploader("Previous period file (.xlsx, optional)", type=["xlsx"], key="previous")
-    disease_market = st.text_input("Disease Market", placeholder="e.g., aGvHD, cGvHD, Hematology")
-    enable_live_research = st.checkbox("Enable live internet research", value=False)
 
     st.divider()
     st.header("Segmentation settings")
@@ -111,8 +108,6 @@ with st.spinner("Running analysis..."):
             validation_notes=validation_notes,
             previous_df=previous_df,
             previous_id_column=previous_id_column,
-            disease_market=disease_market.strip() or None,
-            enable_live_research=enable_live_research,
         )
     except Exception as exc:
         st.exception(exc)
@@ -123,6 +118,17 @@ with st.spinner("Running analysis..."):
 st.subheader("Summary insights")
 for item in payload.get("summary_insights", []):
     st.write(f"- {item}")
+
+
+st.subheader("Segment Summary")
+segment_band_df = pd.DataFrame(payload.get("segment_band_summary", []))
+if not segment_band_df.empty:
+    cards = st.columns(3)
+    for idx, row in segment_band_df.iterrows():
+        with cards[idx % 3]:
+            st.metric(label=str(row["segment_band"]), value=f"{int(row['hcp_count']):,}", delta=f"{float(row['hcp_pct']):.1f}% of HCPs")
+else:
+    st.info("Segment band summary is unavailable for this run.")
 
 
 # ---------- Excel download ----------
@@ -149,8 +155,7 @@ if df.empty or "decile" not in df.columns or "composite_score" not in df.columns
     st.info("Charts unavailable: missing decile/composite_score columns.")
     st.stop()
 
-
-def plot_lorenz(ax, df: pd.DataFrame) -> None:
+def _build_lorenz(df: pd.DataFrame) -> pd.DataFrame:
     work = df[["decile", "composite_score"]].copy()
     work["decile_num"] = work["decile"].astype(str).str.replace("D", "", regex=False).astype(int)
     grouped = (
@@ -162,80 +167,99 @@ def plot_lorenz(ax, df: pd.DataFrame) -> None:
     grouped["cum_potential"] = grouped["potential"].cumsum()
     total_p = grouped["prescribers"].sum() or 1
     total_v = grouped["potential"].sum() or 1
-    x = (grouped["cum_potential"] / total_v) * 100
-    y = (grouped["cum_prescribers"] / total_p) * 100
-    x = pd.concat([pd.Series([0.0]), x], ignore_index=True)
-    y = pd.concat([pd.Series([0.0]), y], ignore_index=True)
-    ax.plot(x, y, marker="o", linewidth=2.6, color="#2A6FBA")
-    ax.plot([0, 100], [0, 100], linestyle="--", linewidth=1.2, color="#A0A7B4")
-    ax.fill_between(x, y, alpha=0.15, color="#2A6FBA")
-    ax.set_xlim(0, 100)
-    ax.set_ylim(0, 100)
-    ax.set_title("Lorenz Curve for HCPs", fontweight="bold")
-    ax.set_xlabel("Cumulative % of Potential")
-    ax.set_ylabel("Cumulative % of Prescribers")
-    ax.grid(alpha=0.3)
-
-
-def plot_bubble(ax, df: pd.DataFrame, selected_metrics: list[str]) -> None:
-    axis_metrics = [m for m in selected_metrics if m in df.columns][:2]
-    if len(axis_metrics) < 2:
-        axis_metrics = ["composite_score", "decile_numeric"] if "decile_numeric" in df.columns else ["composite_score", "composite_score"]
-    x_col, y_col = axis_metrics[0], axis_metrics[1]
-    labels = df["segment_label"].fillna("Segment") if "segment_label" in df.columns else pd.Series(["Segment"] * len(df))
-    unique_labels = sorted(labels.unique())
-    comp = df["composite_score"].astype(float)
-    cmin, cmax = float(comp.min()), float(comp.max())
-    sizes = np.full(len(df), 90.0) if cmax - cmin <= 1e-9 else 60 + 340 * ((comp - cmin) / (cmax - cmin))
-    palette = ["#2A6FBA", "#EF476F", "#06D6A0", "#8D6CAB", "#F4A261", "#118AB2", "#8338EC"]
-    for idx, label in enumerate(unique_labels):
-        mask = labels == label
-        ax.scatter(
-            df.loc[mask, x_col], df.loc[mask, y_col],
-            s=sizes[mask.values], alpha=0.65,
-            color=palette[idx % len(palette)],
-            edgecolors="#2F3B52", linewidths=0.4, label=str(label),
-        )
-    ax.set_title("Cluster Bubble View", fontweight="bold")
-    ax.set_xlabel(x_col)
-    ax.set_ylabel(y_col)
-    ax.grid(alpha=0.25)
-    ax.legend(loc="best", fontsize=8, frameon=False)
-
-
-def plot_decile(ax, df: pd.DataFrame) -> None:
-    counts = (
-        df["decile"].astype(str).str.replace("D", "", regex=False).astype(int)
-        .value_counts().sort_index(ascending=False)
+    lorenz_df = pd.DataFrame(
+        {
+            "cum_prescribers_pct": (grouped["cum_prescribers"] / total_p) * 100,
+            "cum_potential_pct": (grouped["cum_potential"] / total_v) * 100,
+            "decile": grouped["decile_num"].astype(int).map(lambda x: f"D{x}"),
+        }
     )
-    deciles = [f"D{d}" for d in counts.index.tolist()]
-    vals = counts.values.tolist()
-    bars = ax.bar(deciles, vals, color="#457B9D", edgecolor="#2F3B52", linewidth=0.6)
-    ax.set_title("HCP Count by Decile", fontweight="bold")
-    ax.set_xlabel("Decile")
-    ax.set_ylabel("Number of HCPs")
-    ax.grid(axis="y", alpha=0.25)
-    for bar, value in zip(bars, vals):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), str(value),
-                ha="center", va="bottom", fontsize=8)
+    start = pd.DataFrame([{"cum_prescribers_pct": 0.0, "cum_potential_pct": 0.0, "decile": "Start"}])
+    return pd.concat([start, lorenz_df], ignore_index=True)
+
+
+def _build_decile_counts(df: pd.DataFrame) -> pd.DataFrame:
+    decile_nums = (
+        df["decile"].astype(str).str.replace("D", "", regex=False).astype(int)
+    )
+    series = decile_nums.value_counts().sort_index(ascending=False)
+    return pd.DataFrame({
+        "decile_num": [int(d) for d in series.index],
+        "decile": [f"D{int(d)}" for d in series.index],
+        "hcp_count": series.values,
+    })
 
 
 col1, col2 = st.columns(2)
-with col1:
-    fig1 = Figure(figsize=(6, 4.2))
-    plot_lorenz(fig1.add_subplot(111), df)
-    fig1.tight_layout()
-    st.pyplot(fig1)
-with col2:
-    fig2 = Figure(figsize=(6, 4.2))
-    plot_bubble(fig2.add_subplot(111), df, list(selected_weights.keys()))
-    fig2.tight_layout()
-    st.pyplot(fig2)
 
-fig3 = Figure(figsize=(12, 3.6))
-plot_decile(fig3.add_subplot(111), df)
-fig3.tight_layout()
-st.pyplot(fig3)
+with col1:
+    lorenz_df = _build_lorenz(df)
+    lorenz_fig = go.Figure()
+    lorenz_fig.add_trace(
+        go.Scatter(
+            x=lorenz_df["cum_prescribers_pct"],
+            y=lorenz_df["cum_potential_pct"],
+            mode="lines+markers",
+            line={"width": 3, "color": "#1f77b4"},
+            name="Lorenz curve",
+            hovertemplate="Cum. Prescribers: %{x:.1f}%<br>Cum. Potential: %{y:.1f}%<extra></extra>",
+        )
+    )
+    lorenz_fig.add_trace(
+        go.Scatter(
+            x=[0, 100],
+            y=[0, 100],
+            mode="lines",
+            line={"dash": "dash", "color": "#9aa6b2"},
+            name="Parity line",
+            hoverinfo="skip",
+        )
+    )
+    lorenz_fig.update_layout(
+        title="Cumulative % of Potential",
+        xaxis_title="Cum. % of Prescribers",
+        yaxis_title="Cum. % of Potential",
+        xaxis={"range": [0, 100]},
+        yaxis={"range": [0, 100]},
+        legend={"orientation": "h", "y": -0.2},
+    )
+    st.plotly_chart(lorenz_fig, use_container_width=True)
+
+with col2:
+    decile_counts = _build_decile_counts(df)
+    decile_bar = px.bar(
+        decile_counts,
+        x="decile",
+        y="hcp_count",
+        text="hcp_count",
+        title="# of HCPs by Decile",
+        color_discrete_sequence=["#2f6ea8"],
+    )
+    decile_bar.update_traces(textposition="outside")
+    decile_bar.update_layout(xaxis_title="Decile", yaxis_title="# of HCPs")
+    st.plotly_chart(decile_bar, use_container_width=True)
+
+segment_chart_df = pd.DataFrame(payload.get("segment_band_summary", []))
+if not segment_chart_df.empty:
+    segment_bar = px.bar(
+        segment_chart_df,
+        x="segment_band",
+        y="hcp_count",
+        text="hcp_count",
+        title="HCPs in High / Medium / Low Segments",
+        color="segment_band",
+        color_discrete_map={"High (7-10)": "#006d77", "Medium (4-6)": "#ee9b00", "Low (1-3)": "#bb3e03"},
+    )
+    segment_bar.update_layout(showlegend=False, xaxis_title="Segment", yaxis_title="# of HCPs")
+    segment_bar.update_traces(textposition="outside")
+    st.plotly_chart(segment_bar, use_container_width=True)
+
+st.subheader("Decile-Specialty Summary")
+decile_specialty_df = pd.DataFrame(payload.get("decile_specialty_summary", []))
+if decile_specialty_df.empty:
+    st.info("No specialty column was detected, so decile-specialty summary is unavailable.")
+else:
+    st.dataframe(decile_specialty_df, use_container_width=True)
 
 
 # ---------- Scored data preview ----------

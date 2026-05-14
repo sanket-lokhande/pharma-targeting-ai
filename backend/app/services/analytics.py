@@ -22,13 +22,15 @@ def compute_scores_and_deciles(
     if missing_metrics:
         raise ValueError(f"Selected metrics not found in dataset: {missing_metrics}")
 
-    work_df = df[[id_column] + metrics].copy()
+    # Keep all source columns so downstream dashboards/exports can summarize
+    # dimensions like specialty without rejoining to the raw dataset.
+    work_df = df.copy()
 
     # Deciling is explicitly based on min-max normalized metrics as requested.
     # This ensures composite scores are non-negative and cumulative decile formula
     # behaves exactly like the spreadsheet implementation.
     scaler = MinMaxScaler()
-    scaled_values = np.nan_to_num(scaler.fit_transform(work_df[metrics].values))
+    scaled_values = np.nan_to_num(scaler.fit_transform(df[metrics].values))
     composite_scores = np.dot(scaled_values, weights)
     work_df["composite_score"] = composite_scores
 

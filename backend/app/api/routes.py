@@ -183,10 +183,9 @@ def _run_analysis(request: AnalyzeRequest) -> Dict[str, Any]:
         normalization=request.normalization,
     )
 
-    metrics = [item.metric for item in request.metric_weights]
     segmented_df, explainability, segment_labels = segment_hcps(
         scored_df=scored_df,
-        feature_columns=metrics + ["composite_score"],
+        feature_columns=["composite_score"],
         algorithm=request.segmentation_algorithm,
         n_clusters=request.n_clusters,
     )
@@ -217,7 +216,7 @@ def _run_analysis(request: AnalyzeRequest) -> Dict[str, Any]:
         )
         prev_segmented, _, _ = segment_hcps(
             scored_df=prev_scored,
-            feature_columns=metrics + ["composite_score"],
+            feature_columns=["composite_score"],
             algorithm=request.segmentation_algorithm,
             n_clusters=request.n_clusters,
         )
